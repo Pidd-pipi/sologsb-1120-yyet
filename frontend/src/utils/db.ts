@@ -3,10 +3,11 @@ import type { Clock } from '../types/clock';
 import type { MovementPart } from '../types/part';
 import type { RepairStep } from '../types/step';
 import type { TimekeepingTest } from '../types/test';
+import type { Estimate } from '../types/estimate';
 import { newId } from './id';
 
 export const DB_NAME = 'gbclockrepair';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbclockrepair:db-version';
 
 class ClockRepairDB extends Dexie {
@@ -14,6 +15,7 @@ class ClockRepairDB extends Dexie {
   parts!: Table<MovementPart, string>;
   steps!: Table<RepairStep, string>;
   tests!: Table<TimekeepingTest, string>;
+  estimates!: Table<Estimate, string>;
 
   constructor() {
     super(DB_NAME);
@@ -48,6 +50,14 @@ class ClockRepairDB extends Dexie {
             if (row.positions === undefined) row.positions = [];
           });
       });
+    // v3：新增估价单表（老档案无需改动，打开即自动建表）
+    this.version(3).stores({
+      clocks: 'id, clockNo, kind, caliber, conditionGrade, createdAt',
+      parts: 'id, clockId, name, wearState, decision, sourceLot',
+      steps: 'id, clockId, seq, stepType, state, startedAt',
+      tests: 'id, clockId, testedAt, conclusion',
+      estimates: 'id, clockId, version, state, createdAt',
+    });
   }
 }
 
@@ -208,7 +218,8 @@ export async function ensureSeedData(): Promise<void> {
       troubleNote: '',
       operator: '祁仲言',
       startedAt: now - 3 * day,
-      state: 'pending',
+      finishedAt: now - 3 * day + 35 * 60000,
+      state: 'done',
     },
   ];
 
@@ -231,10 +242,88 @@ export async function ensureSeedData(): Promise<void> {
     },
   ];
 
-  await db.transaction('rw', db.clocks, db.parts, db.steps, db.tests, async () => {
+  /**
+   * 估价单示范数据：
+   * - 钟表 A：v1 已确认（¥890），确认后发条由「修配」改「换新」且工序全部完成，
+   *   师傅已填报 v2 补价草稿（¥1330）→ 待补价 +¥440，补充金额确认前不能完成维修；
+   * - 钟表 B：v1 已确认且基线无变化 → 正常的已确认状态。
+   */
+  const estimates: Estimate[] = [
+    {
+      id: newId('est'),
+      clockId: clockA,
+      version: 1,
+      state: 'confirmed',
+      items: [
+        { id: newId('itm'), kind: 'material', label: '发条（修配）材料费', source: 'part', refId: parts[0].id, qty: 1, unitPrice: 180, amount: 180 },
+        { id: newId('itm'), kind: 'material', label: '宝石轴承（修配）材料费', source: 'part', refId: parts[1].id, qty: 4, unitPrice: 60, amount: 240 },
+        { id: newId('itm'), kind: 'labor', label: '#1 拆解 工时', source: 'step', refId: steps[0].id, qty: 1, unitPrice: 200, amount: 200 },
+        { id: newId('itm'), kind: 'labor', label: '#2 清洗 工时', source: 'step', refId: steps[1].id, qty: 1, unitPrice: 150, amount: 150 },
+        { id: newId('itm'), kind: 'labor', label: '#3 润滑 工时', source: 'step', refId: steps[2].id, qty: 1, unitPrice: 120, amount: 120 },
+      ],
+      laborTotal: 470,
+      materialTotal: 420,
+      total: 890,
+      note: '送修时口头报价落单',
+      createdBy: '祁仲言',
+      createdAt: now - 13 * day,
+      confirmedBy: '前台·周岚',
+      confirmedAt: now - 13 * day + 3600 * 1000,
+      baseline: {
+        partDecisions: { [parts[0].id]: '修配', [parts[1].id]: '修配' },
+        pendingStepCount: 1,
+        total: 890,
+      },
+    },
+    {
+      id: newId('est'),
+      clockId: clockA,
+      version: 2,
+      state: 'draft',
+      items: [
+        { id: newId('itm'), kind: 'material', label: '发条（换新）材料费', source: 'part', refId: parts[0].id, qty: 1, unitPrice: 460, amount: 460 },
+        { id: newId('itm'), kind: 'material', label: '宝石轴承（修配）材料费', source: 'part', refId: parts[1].id, qty: 4, unitPrice: 60, amount: 240 },
+        { id: newId('itm'), kind: 'labor', label: '#1 拆解 工时', source: 'step', refId: steps[0].id, qty: 1, unitPrice: 200, amount: 200 },
+        { id: newId('itm'), kind: 'labor', label: '#2 清洗 工时', source: 'step', refId: steps[1].id, qty: 1, unitPrice: 150, amount: 150 },
+        { id: newId('itm'), kind: 'labor', label: '#3 润滑 工时', source: 'step', refId: steps[2].id, qty: 1, unitPrice: 120, amount: 120 },
+        { id: newId('itm'), kind: 'labor', label: '调试校准工时', source: 'custom', qty: 1, unitPrice: 160, amount: 160 },
+      ],
+      laborTotal: 630,
+      materialTotal: 700,
+      total: 1330,
+      note: '发条锈蚀严重改为换新，补差价',
+      createdBy: '祁仲言',
+      createdAt: now - 1 * day,
+    },
+    {
+      id: newId('est'),
+      clockId: clockB,
+      version: 1,
+      state: 'confirmed',
+      items: [
+        { id: newId('itm'), kind: 'labor', label: '洗油保养工时', source: 'custom', qty: 1, unitPrice: 380, amount: 380 },
+      ],
+      laborTotal: 380,
+      materialTotal: 0,
+      total: 380,
+      note: '',
+      createdBy: '祁仲言',
+      createdAt: now - 8 * day,
+      confirmedBy: '前台·周岚',
+      confirmedAt: now - 8 * day + 1800 * 1000,
+      baseline: {
+        partDecisions: { [parts[2].id]: '保留' },
+        pendingStepCount: 0,
+        total: 380,
+      },
+    },
+  ];
+
+  await db.transaction('rw', db.clocks, db.parts, db.steps, db.tests, db.estimates, async () => {
     await db.clocks.bulkPut(clocks);
     await db.parts.bulkPut(parts);
     await db.steps.bulkPut(steps);
     await db.tests.bulkPut(tests);
+    await db.estimates.bulkPut(estimates);
   });
 }

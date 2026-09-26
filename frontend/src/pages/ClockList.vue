@@ -4,30 +4,22 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useClockStore } from '../stores/clockStore';
 import { useStepStore } from '../stores/stepStore';
+import { usePartStore } from '../stores/partStore';
+import { useEstimateStore } from '../stores/estimateStore';
 import { useClockSearch } from '../hooks/useClockSearch';
+import { useRepairState, REPAIR_STATES } from '../hooks/useRepairState';
+import { useEstimateStatus } from '../hooks/useEstimateStatus';
 import ClockCard from '../components/common/ClockCard.vue';
 import { CLOCK_KINDS, CONDITION_GRADES, type ClockDraft, type ClockKind, type ConditionGrade } from '../types/clock';
 
 const router = useRouter();
 const clockStore = useClockStore();
 const stepStore = useStepStore();
+const partStore = usePartStore();
+const estimateStore = useEstimateStore();
 const { filters, result, options, reset } = useClockSearch();
-
-const REPAIR_STATES = ['未开工', '维修中', '待测试', '已完成'] as const;
-
-type RepairState = (typeof REPAIR_STATES)[number];
-
-/** 由工序与走时测试推导修复状态，用于台账分栏 */
-function repairStateOf(clockId: string): RepairState {
-  const steps = stepStore.items.filter((s) => s.clockId === clockId);
-  const tests = stepStore.tests.filter((t) => t.clockId === clockId);
-  const done = steps.filter((s) => s.state === 'done').length;
-  if (steps.length === 0) return '未开工';
-  if (done === steps.length && tests.length > 0) return '已完成';
-  if (done === steps.length) return '待测试';
-  if (done > 0) return '维修中';
-  return '未开工';
-}
+const { repairStateOf } = useRepairState();
+const { statusOf, tagOf } = useEstimateStatus();
 
 const columns = computed(() =>
   REPAIR_STATES.map((state) => ({
@@ -35,6 +27,15 @@ const columns = computed(() =>
     rows: result.value.filter((it) => repairStateOf(it.id) === state),
   })),
 );
+
+/** 待补价台数（补充金额未确认，维修不能完成） */
+const pendingEstimateCount = computed(
+  () => clockStore.items.filter((it) => statusOf(it.id).pending).length,
+);
+
+function tagFor(id: string) {
+  return tagOf(id);
+}
 
 const dialogVisible = ref(false);
 const form = reactive<ClockDraft>({
@@ -79,6 +80,8 @@ async function submit() {
 onMounted(() => {
   void clockStore.load();
   void stepStore.load();
+  void partStore.load();
+  void estimateStore.load();
 });
 </script>
 
@@ -88,6 +91,7 @@ onMounted(() => {
       <h2>钟表台账</h2>
       <el-tag>共 {{ clockStore.items.length }} 台</el-tag>
       <el-tag type="info" effect="plain">筛选命中 {{ result.length }} 台</el-tag>
+      <el-tag v-if="pendingEstimateCount > 0" type="danger">待补价 {{ pendingEstimateCount }} 台</el-tag>
       <div class="spacer" />
       <el-button type="primary" @click="openDialog">建档</el-button>
     </div>
@@ -147,7 +151,15 @@ onMounted(() => {
             stepStore.items.filter((s) => s.clockId === item.id).length
           } · 走时测试 ${stepStore.tests.filter((t) => t.clockId === item.id).length} 次`"
           @open="(id) => router.push(`/clocks/${id}`)"
-        />
+        >
+          <template #extra>
+            <div v-if="tagFor(item.id)" class="estimate-row">
+              <el-tag :type="tagFor(item.id)?.type ?? 'info'" size="small" effect="light">
+                {{ tagFor(item.id)?.label }}
+              </el-tag>
+            </div>
+          </template>
+        </ClockCard>
         <el-empty v-if="col.rows.length === 0" description="暂无" :image-size="60" />
       </div>
     </div>
@@ -221,7 +233,7 @@ onMounted(() => {
 }
 .board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 12px;
 }
 .column {
@@ -234,5 +246,8 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 15px;
+}
+.estimate-row {
+  margin-top: 6px;
 }
 </style>

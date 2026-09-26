@@ -5,24 +5,34 @@ import { ElMessage } from 'element-plus';
 import { useClockStore } from '../stores/clockStore';
 import { usePartStore } from '../stores/partStore';
 import { useStepStore } from '../stores/stepStore';
+import { useEstimateStore } from '../stores/estimateStore';
 import { useRepairProgress } from '../hooks/useRepairProgress';
+import { useRepairState } from '../hooks/useRepairState';
+import { useEstimateStatus } from '../hooks/useEstimateStatus';
 import StepSequence from '../components/common/StepSequence.vue';
 import RateChart from '../components/common/RateChart.vue';
 import StateBadge from '../components/common/StateBadge.vue';
+import EstimatePanel from '../components/common/EstimatePanel.vue';
 import { CONDITION_GRADES, type ConditionGrade } from '../types/clock';
 import { judgeTest } from '../types/test';
+import { formatDiff, formatMoney } from '../utils/estimate';
 
 const route = useRoute();
 const router = useRouter();
 const clockStore = useClockStore();
 const partStore = usePartStore();
 const stepStore = useStepStore();
+const estimateStore = useEstimateStore();
 
 const clockId = computed(() => String(route.params.id ?? ''));
 const clock = computed(() => clockStore.byId(clockId.value));
 const { progress, steps, done, total, percent, current, gaps } = useRepairProgress(clockId);
+const { repairStateOf } = useRepairState();
+const { statusOf } = useEstimateStatus();
 const parts = computed(() => partStore.byClock(clockId.value));
 const tests = computed(() => stepStore.testsByClock(clockId.value));
+const repairState = computed(() => repairStateOf(clockId.value));
+const estStatus = computed(() => statusOf(clockId.value));
 const activeTab = ref('steps');
 
 async function finish(id: string) {
@@ -55,6 +65,7 @@ onMounted(async () => {
   await clockStore.load();
   await partStore.load();
   await stepStore.load();
+  await estimateStore.load();
 });
 </script>
 
@@ -65,13 +76,30 @@ onMounted(async () => {
       <StateBadge v-if="clock" :grade="clock.conditionGrade" />
       <el-tag v-if="gaps.length" type="danger">顺序号缺口：{{ gaps.join('、') }}</el-tag>
       <el-tag v-else type="success" effect="plain">顺序号连续</el-tag>
+      <el-tag v-if="estStatus.pending" type="danger">
+        待补价 {{ estStatus.diff != null ? formatDiff(estStatus.diff) : '· 差额待填报' }}
+      </el-tag>
+      <el-tag v-else-if="estStatus.confirmed" type="success" effect="plain">
+        估价已确认 {{ formatMoney(estStatus.confirmed.total) }}
+      </el-tag>
       <div class="spacer" />
       <el-button type="primary" @click="router.push(`/steps/new?clockId=${clockId}`)">追加维修工序</el-button>
+      <el-button @click="router.push(`/estimates/${clockId}`)">估价单</el-button>
       <el-button @click="router.push(`/tests/${clockId}`)">走时测试录入</el-button>
       <el-button @click="router.push('/clocks')">返回台账</el-button>
     </div>
 
     <el-alert v-if="!clock" type="warning" :closable="false" title="未找到该钟表（可能已被删除）" show-icon />
+    <el-alert
+      v-if="clock && repairState === '待补价'"
+      type="error"
+      :closable="false"
+      show-icon
+      title="补充金额待前台确认，确认前维修不能完成"
+      :description="`${estStatus.reasons.join('；')}${
+        estStatus.diff != null ? `；待确认差额 ${formatDiff(estStatus.diff)}` : '；差额待填报'
+      }`"
+    />
 
     <div v-if="clock" class="grid">
       <el-card shadow="never">
@@ -131,6 +159,9 @@ onMounted(async () => {
                 <el-table-column prop="dimension" label="尺寸 mm" width="100" />
               </el-table>
               <el-empty v-if="parts.length === 0" description="暂无零件登记" :image-size="60" />
+            </el-tab-pane>
+            <el-tab-pane :label="estStatus.pending ? '估价单（待补价）' : '估价单'" name="estimate">
+              <EstimatePanel :clock-id="clockId" />
             </el-tab-pane>
             <el-tab-pane :label="`走时测试（${tests.length}）`" name="tests">
               <div v-for="t in tests" :key="t.id" class="test-block">
