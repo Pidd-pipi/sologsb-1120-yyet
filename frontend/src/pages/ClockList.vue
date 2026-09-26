@@ -4,13 +4,24 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useClockStore } from '../stores/clockStore';
 import { useStepStore } from '../stores/stepStore';
+import { usePartStore } from '../stores/partStore';
+import { useEstimateStore } from '../stores/estimateStore';
 import { useClockSearch } from '../hooks/useClockSearch';
 import ClockCard from '../components/common/ClockCard.vue';
 import { CLOCK_KINDS, CONDITION_GRADES, type ClockDraft, type ClockKind, type ConditionGrade } from '../types/clock';
+import {
+  ESTIMATE_VIEW_LABELS,
+  formatDiff,
+  formatMoney,
+  summarizeEstimate,
+  type EstimateViewState,
+} from '../types/estimate';
 
 const router = useRouter();
 const clockStore = useClockStore();
 const stepStore = useStepStore();
+const partStore = usePartStore();
+const estimateStore = useEstimateStore();
 const { filters, result, options, reset } = useClockSearch();
 
 const REPAIR_STATES = ['未开工', '维修中', '待测试', '已完成'] as const;
@@ -35,6 +46,38 @@ const columns = computed(() =>
     rows: result.value.filter((it) => repairStateOf(it.id) === state),
   })),
 );
+
+interface EstimateTag {
+  label: string;
+  type: 'danger' | 'warning' | 'success' | 'info';
+}
+
+/** 台账卡片上的估价标签：待补价时突出待确认差额 */
+function estimateTag(clockId: string): EstimateTag | null {
+  const summary = summarizeEstimate(
+    estimateStore.byClock(clockId),
+    partStore.byClock(clockId),
+    stepStore.items.filter((s) => s.clockId === clockId).length,
+  );
+  const tagType: Record<EstimateViewState, EstimateTag['type']> = {
+    none: 'info',
+    unconfirmed: 'warning',
+    confirmed: 'success',
+    'pending-diff': 'danger',
+  };
+  if (summary.state === 'none') return null;
+  if (summary.state === 'unconfirmed' && summary.pending) {
+    return { label: `估价待确认 ${formatMoney(summary.pending.total)}`, type: 'warning' };
+  }
+  if (summary.state === 'pending-diff') {
+    const diff = summary.diff !== null ? ` ${formatDiff(summary.diff)}` : '（待重新估价）';
+    return { label: `${ESTIMATE_VIEW_LABELS['pending-diff']}${diff}`, type: 'danger' };
+  }
+  if (summary.state === 'confirmed' && summary.confirmed) {
+    return { label: `估价已确认 ${formatMoney(summary.confirmed.total)}`, type: tagType[summary.state] };
+  }
+  return null;
+}
 
 const dialogVisible = ref(false);
 const form = reactive<ClockDraft>({
@@ -79,6 +122,8 @@ async function submit() {
 onMounted(() => {
   void clockStore.load();
   void stepStore.load();
+  void partStore.load();
+  void estimateStore.load();
 });
 </script>
 
@@ -147,7 +192,11 @@ onMounted(() => {
             stepStore.items.filter((s) => s.clockId === item.id).length
           } · 走时测试 ${stepStore.tests.filter((t) => t.clockId === item.id).length} 次`"
           @open="(id) => router.push(`/clocks/${id}`)"
-        />
+        >
+          <div v-if="estimateTag(item.id)" class="estimate-line">
+            <el-tag :type="estimateTag(item.id)!.type" size="small">{{ estimateTag(item.id)!.label }}</el-tag>
+          </div>
+        </ClockCard>
         <el-empty v-if="col.rows.length === 0" description="暂无" :image-size="60" />
       </div>
     </div>
@@ -234,5 +283,8 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 15px;
+}
+.estimate-line {
+  margin-top: 6px;
 }
 </style>

@@ -26,6 +26,7 @@ const emit = defineEmits<{
     <div class="line">盘面：{{ item.dialMark }}</div>
     <div class="line">存放：{{ item.storagePos }}</div>
     <div v-if="footer" class="line footer">{{ footer }}</div>
+    <slot />
   </el-card>
 </template>
 

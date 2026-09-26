@@ -3,10 +3,11 @@ import type { Clock } from '../types/clock';
 import type { MovementPart } from '../types/part';
 import type { RepairStep } from '../types/step';
 import type { TimekeepingTest } from '../types/test';
+import type { Estimate } from '../types/estimate';
 import { newId } from './id';
 
 export const DB_NAME = 'gbclockrepair';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbclockrepair:db-version';
 
 class ClockRepairDB extends Dexie {
@@ -14,6 +15,7 @@ class ClockRepairDB extends Dexie {
   parts!: Table<MovementPart, string>;
   steps!: Table<RepairStep, string>;
   tests!: Table<TimekeepingTest, string>;
+  estimates!: Table<Estimate, string>;
 
   constructor() {
     super(DB_NAME);
@@ -48,6 +50,10 @@ class ClockRepairDB extends Dexie {
             if (row.positions === undefined) row.positions = [];
           });
       });
+    // v3：新增维修估价单表（旧档案自动升级，原有四表结构不变）
+    this.version(3).stores({
+      estimates: 'id, clockId, version, status, createdAt',
+    });
   }
 }
 
@@ -231,10 +237,49 @@ export async function ensureSeedData(): Promise<void> {
     },
   ];
 
-  await db.transaction('rw', db.clocks, db.parts, db.steps, db.tests, async () => {
+  const estimates: Estimate[] = [
+    {
+      id: newId('est'),
+      clockId: clockA,
+      version: 1,
+      laborFee: 800,
+      materialFee: 350,
+      total: 1150,
+      status: 'confirmed',
+      snapshot: {
+        stepCount: 3,
+        partDecisions: [
+          { partId: parts[0].id, name: '发条', decision: '换新' },
+          { partId: parts[1].id, name: '宝石轴承', decision: '修配' },
+        ],
+      },
+      createdBy: '祁仲言',
+      createdAt: now - 18 * day,
+      confirmedBy: '前台-小周',
+      confirmedAt: now - 17 * day,
+    },
+    {
+      id: newId('est'),
+      clockId: clockB,
+      version: 1,
+      laborFee: 500,
+      materialFee: 0,
+      total: 500,
+      status: 'pending',
+      snapshot: {
+        stepCount: 0,
+        partDecisions: [{ partId: parts[2].id, name: '摆轮', decision: '保留' }],
+      },
+      createdBy: '祁仲言',
+      createdAt: now - 1 * day,
+    },
+  ];
+
+  await db.transaction('rw', db.clocks, db.parts, db.steps, db.tests, db.estimates, async () => {
     await db.clocks.bulkPut(clocks);
     await db.parts.bulkPut(parts);
     await db.steps.bulkPut(steps);
     await db.tests.bulkPut(tests);
+    await db.estimates.bulkPut(estimates);
   });
 }

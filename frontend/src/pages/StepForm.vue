@@ -5,7 +5,9 @@ import { ElMessage } from 'element-plus';
 import { useClockStore } from '../stores/clockStore';
 import { usePartStore } from '../stores/partStore';
 import { useStepStore } from '../stores/stepStore';
+import { useEstimateStore } from '../stores/estimateStore';
 import { useRepairProgress } from '../hooks/useRepairProgress';
+import { useEstimateStatus } from '../hooks/useEstimateStatus';
 import StepSequence from '../components/common/StepSequence.vue';
 import { STEP_FIELD_MAP, STEP_TYPES, type RepairStepDraft, type StepType } from '../types/step';
 
@@ -14,9 +16,11 @@ const router = useRouter();
 const clockStore = useClockStore();
 const partStore = usePartStore();
 const stepStore = useStepStore();
+const estimateStore = useEstimateStore();
 
 const clockId = ref(String(route.query.clockId ?? ''));
 const { steps, total, percent, current, gaps } = useRepairProgress(clockId);
+const { hasPendingDiff } = useEstimateStatus(clockId);
 const parts = computed(() => partStore.byClock(clockId.value));
 const nextSeq = computed(() => (steps.value.length === 0 ? 1 : Math.max(...steps.value.map((s) => s.seq)) + 1));
 
@@ -83,6 +87,10 @@ async function submit() {
 }
 
 async function finish(id: string) {
+  if (hasPendingDiff.value) {
+    ElMessage.error('存在待确认差额，请前台确认补充金额后才能完成维修');
+    return;
+  }
   await stepStore.finish(id);
   ElMessage.success('步骤已完成');
 }
@@ -95,6 +103,7 @@ onMounted(async () => {
   await clockStore.load();
   await partStore.load();
   await stepStore.load();
+  await estimateStore.load();
   if (!clockId.value && clockStore.items.length > 0) {
     clockId.value = clockStore.items[0].id;
   }
